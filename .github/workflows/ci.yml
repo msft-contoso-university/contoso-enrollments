@@ -1,6 +1,7 @@
 name: CI
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
   push:
   workflow_dispatch:
 permissions:
@@ -17,8 +18,11 @@ jobs:
           github-token: ${{ github.token }}
   build:
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
         with:
           dotnet-version: 10.0.404
@@ -48,10 +52,10 @@ jobs:
           set -euo pipefail
           password="Aa1!$(openssl rand -hex 18)"
           echo "::add-mask::$password"
-          docker run -d --name sql-enrollments -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD="$password" -p 127.0.0.1::1433 mcr.microsoft.com/mssql/server:2022-latest
+          docker run -d --name sql-enrollments -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD="$password" -p 127.0.0.1::1433 mcr.microsoft.com/mssql/server@sha256:4525e3efac9f3e241cb003bb2ff2a82818b502f37e12049d788b1a9fa7e13b7f
           port=$(docker port sql-enrollments 1433/tcp | sed 's/.*://')
           for i in {1..60}; do
-            if docker exec sql-enrollments /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$password" -C -Q 'SELECT 1' > /dev/null 2>&1; then ready=1; break; fi
+            if timeout 4s docker exec --env SQLCMDPASSWORD="$password" sql-enrollments /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -C -b -l 3 -t 3 -Q 'SELECT 1' > /dev/null 2>&1; then ready=1; break; fi
             sleep 2
           done
           test "${ready:-0}" = 1
@@ -100,6 +104,12 @@ jobs:
             candidate-image.tar.gz
             candidate-source-sha.txt
             sql/migrations.sql
+  consumers:
+    needs: build
+    permissions:
+      contents: read
+      actions: read
+    uses: msft-contoso-university/contoso-engineering/.github/workflows/consumer-checks.yml@eb98dd06864557ab29afc0567664ad7f20055358
   codeql:
     name: Candidate CodeQL
     runs-on: ubuntu-24.04
@@ -134,7 +144,7 @@ jobs:
   required:
     name: Required
     if: always()
-    needs: [story, build, codeql]
+    needs: [story, build, codeql, consumers]
     runs-on: ubuntu-24.04
     steps:
       - env:
@@ -142,7 +152,9 @@ jobs:
           STORY: ${{ needs.story.result }}
           BUILD: ${{ needs.build.result }}
           CODEQL: ${{ needs.codeql.result }}
+          CONSUMERS: ${{ needs.consumers.result }}
         run: |
           test "$BUILD" = success
           test "$CODEQL" = success
+          test "$CONSUMERS" = success
           if [ "$EVENT" = pull_request ]; then test "$STORY" = success; else test "$STORY" = skipped; fi
