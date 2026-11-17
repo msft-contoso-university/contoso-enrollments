@@ -64,9 +64,10 @@ coverage, malformed JSON, nonobject envelopes/bodies, traversal, symlinks/repars
 points (including directory ancestors), subdirectories and non-JSON files fail.
 Limits: 32 files, 1 MiB/file, 4 MiB total, JSON depth 32. Supply a dedicated immutable
 artifact directory on a controlled runner: this loader is not an archive extractor
-or protection against concurrent filesystem mutation. CI exercises external inputs
-with explicitly synthetic envelopes, not actual producer evidence. Producer workflows
-must capture real HTTP bodies and orchestrate the affected-consumer checks separately.
+or protection against concurrent filesystem mutation. This repository's build job
+also exercises the harness using explicitly synthetic envelopes; those fixtures are
+not producer evidence. The Students and Academics producer workflows separately
+invoke the pinned Enrollments consumer against their actual captured HTTP bodies.
 These are offline payload checks, not live Entra/SQL/Azure or deployment evidence.
 
 The SQL integration test also sends real in-process HTTP requests authenticated with
@@ -78,5 +79,14 @@ grade-update assertions, it writes five **actual** response envelopes (three
 offline/fake. CI uploads only after all SQL HTTP tests and the no-skipped TRX gate pass,
 as `producer-response-samples-${{ github.sha }}-${{ github.run_attempt }}`. This is
 synthetic test data captured from real HTTP responses, not live university data or
-a handwritten response fixture. Downstream orchestration must bind artifact origin
-to the successful producer SHA, run ID and attempt before invoking the Web harness.
+a handwritten response fixture. After that job succeeds, CI invokes the
+[immutable shared workflow](https://github.com/msft-contoso-university/contoso-engineering/blob/eb98dd06864557ab29afc0567664ad7f20055358/.github/workflows/consumer-checks.yml).
+It retrieves this repository's same-run, SHA/attempt-qualified artifact and runs
+the frozen Web consumer selected by the independently pinned candidate policy.
+The `Required` aggregate requires that check to pass; missing, zero, skipped or
+failed test evidence does not pass. The reusable job has only contents/Actions
+read permissions and inherits no secrets.
+
+[Run 44149555454](https://github.com/msft-contoso-university/contoso-enrollments/actions/runs/44149555454)
+passed the actual Enrollments-to-Web check. These source and policy pins are
+unapproved review candidates, not trusted release or live integration evidence.
