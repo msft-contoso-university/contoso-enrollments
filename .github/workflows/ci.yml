@@ -39,13 +39,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           python -m pip install 'openapi-spec-validator==0.7.2' 'PyYAML==6.0.2'
-          gh api 'repos/msft-contoso-university/contoso-students/contents/contracts/students.openapi.yaml?ref=0f9043cb862e5d20644efb32dc690baa16a100a7' --jq .content | base64 -d > students-contract.yaml
-          gh api 'repos/msft-contoso-university/contoso-academics/contents/contracts/academics.openapi.yaml?ref=2eebfe00836c54564bd6519667094f4f71e48dc2' --jq .content | base64 -d > academics-contract.yaml
-          python scripts/validate-contracts.py students-contract.yaml academics-contract.yaml
+          mkdir -p artifacts/upstream
+          gh api 'repos/msft-contoso-university/contoso-students/contents/contracts/students.openapi.yaml?ref=0f9043cb862e5d20644efb32dc690baa16a100a7' --jq .content | base64 -d > artifacts/upstream/students-contract.yaml
+          gh api 'repos/msft-contoso-university/contoso-academics/contents/contracts/academics.openapi.yaml?ref=2eebfe00836c54564bd6519667094f4f71e48dc2' --jq .content | base64 -d > artifacts/upstream/academics-contract.yaml
+          python scripts/validate-contracts.py artifacts/upstream/students-contract.yaml artifacts/upstream/academics-contract.yaml
       - name: Audit packages
         run: |
-          dotnet list package --vulnerable --include-transitive --format json > audit.json
-          python scripts/check-audit.py audit.json
+          dotnet list package --vulnerable --include-transitive --format json > artifacts/audit.json
+          python scripts/check-audit.py artifacts/audit.json
       - name: Start isolated SQL Server
         shell: bash
         run: |
@@ -94,16 +95,16 @@ jobs:
           done
       - name: Build candidate container
         run: |
-          docker build --label "org.opencontainers.image.revision=$GITHUB_SHA" -t enrollments-candidate:$GITHUB_SHA .
-          docker save enrollments-candidate:$GITHUB_SHA | gzip > candidate-image.tar.gz
-          printf '%s\n' "$GITHUB_SHA" > candidate-source-sha.txt
+          python -m unittest discover -s scripts -p 'test_package_image.py'
+          command -v skopeo
+          docker build --platform linux/amd64 --label "org.opencontainers.image.revision=$GITHUB_SHA" -t enrollments-candidate:$GITHUB_SHA .
+          python scripts/package_image.py
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: enrollments-candidate-${{ github.sha }}
-          path: |
-            candidate-image.tar.gz
-            candidate-source-sha.txt
-            sql/migrations.sql
+          name: untrusted-candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/candidate
+          if-no-files-found: error
+          retention-days: 7
   consumers:
     needs: build
     permissions:

@@ -26,6 +26,17 @@ Use `dotnet tool restore`, then `dotnet ef database update --project src/Contoso
 
 Restore with `dotnet restore --locked-mode`, then `dotnet test` and `dotnet publish src/Contoso.Enrollments.Api -c Release`. `Dockerfile` builds a non-root framework-dependent container, with pinned official multi-platform image digests. CI builds a SHA-labelled candidate image and migration artifact; the platform must publish/promote that exact candidate rather than rebuilding between environments. Configure Container Apps liveness `/health/live`, readiness `/health/ready`, port 8080. Docker and Azure SQL are not required for local SQLite tests; CI runs a disposable SQL Server 2022 container with random test database names and checks migration, uniqueness and concurrency. The test SQL target rejects non-loopback hosts. Local SQLite is not evidence of Azure SQL behavior.
 
+CI builds Linux AMD64 once, then uses the hosted runner's Skopeo to export
+`contoso-enrollments-<source-sha>.oci.tar`. It verifies every OCI blob, revision,
+nonroot configuration and unchanged image config/root-filesystem identity.
+`untrusted-candidate-${github.sha}-${github.run_id}-${github.run_attempt}` contains
+that archive, `candidate.json`, `SHA256SUMS` and `sql/migrations.sql`. The manifest's
+`image.manifestDigest` is the exported OCI manifest digest; `image.configDigest`
+is the original Docker image ID, not a registry repository digest. The platform
+must preserve the OCI digest on import and promote it unchanged. No registry
+import, transport, independent approval or Azure release is implied by candidate
+creation or its self-reported hashes.
+
 ## Legacy semantics and v1 differences
 
 The original MIT-licensed source at commit `0716ee7262eff2c268ebb72097ceb93e0fc83536` represented the association as `StudentCourse` with student and course IDs and returned courses nested in Students. It had no grade field in that model. V1 owns a unique pair with a separate ID and an optional grade restricted to A/B/C/D/F; it exposes explicit association CRUD and bounded filtered pages rather than nested student records. It deliberately has no cross-service SQL foreign keys, no remote cascade, and no fabricated enrollment seeds. See `LICENSE` for the original copyright and MIT terms.

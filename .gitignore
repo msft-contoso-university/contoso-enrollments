@@ -4,3 +4,4 @@
 Local.NuGet.Config
 .vs/
 artifacts/
+__pycache__/
