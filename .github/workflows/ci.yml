@@ -57,9 +57,37 @@ jobs:
           test "${ready:-0}" = 1
           echo "ENROLLMENTS_TEST_SQL=Server=127.0.0.1,$port;User ID=sa;Password=$password;TrustServerCertificate=true;Encrypt=true" >> "$GITHUB_ENV"
       - name: Test with SQL Server
+        env:
+          CONTOSO_PRODUCER_SAMPLES: ${{ github.workspace }}/artifacts/producer-response-samples
         run: |
           dotnet test -c Release --no-build --no-restore --logger 'trx;LogFileName=results.trx'
           python scripts/check-test-results.py tests/Contoso.Enrollments.Tests/TestResults/results.trx
+      - name: Upload actual authenticated SQL HTTP producer responses
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: producer-response-samples-${{ github.sha }}-${{ github.run_attempt }}
+          path: artifacts/producer-response-samples/*.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Exercise external consumer sample entrypoint (synthetic only)
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          for producer, schema, fixture in [
+              ("contoso-students", "Student", "student.json"),
+              ("contoso-academics", "Course", "course.json"),
+          ]:
+              directory = Path("artifacts/compatibility") / producer
+              directory.mkdir(parents=True, exist_ok=True)
+              body = json.loads((Path("tests/Contoso.Enrollments.Tests/Fixtures") / fixture).read_text())
+              (directory / (schema + ".json")).write_text(json.dumps({"schema": schema, "body": body}))
+          PY
+          for producer in contoso-students contoso-academics; do
+            CONTOSO_CONSUMER_PRODUCER="$producer" CONTOSO_CONSUMER_SAMPLES="$PWD/artifacts/compatibility/$producer" \
+              dotnet test tests/Contoso.Enrollments.Tests --filter TestCategory=ConsumerCompatibility -c Release --no-build --no-restore
+          done
       - name: Build candidate container
         run: |
           docker build --label "org.opencontainers.image.revision=$GITHUB_SHA" -t enrollments-candidate:$GITHUB_SHA .

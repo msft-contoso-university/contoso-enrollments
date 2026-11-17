@@ -28,7 +28,7 @@ public class ApiTests
     private TestApp app = null!;
     private HttpClient client = null!;
     [TestInitialize] public void Setup() { foreach (var (key, value) in Settings) Environment.SetEnvironmentVariable(key, value); app = new(); client = app.CreateClient(); }
-    private static readonly Dictionary<string, string> Settings = new() { ["ASPNETCORE_ENVIRONMENT"] = "Testing", ["ConnectionStrings__Enrollments"] = "Server=unused;Database=unused", ["AzureAd__TenantId"] = "test", ["AzureAd__Audience"] = "test-audience", ["Students__BaseUrl"] = "https://students.test/", ["Students__Scope"] = "api://students/.default", ["Academics__BaseUrl"] = "https://academics.test/", ["Academics__Scope"] = "api://academics/.default" };
+    internal static readonly Dictionary<string, string> Settings = new() { ["ASPNETCORE_ENVIRONMENT"] = "Testing", ["ConnectionStrings__Enrollments"] = "Server=unused;Database=unused", ["AzureAd__TenantId"] = "test", ["AzureAd__Audience"] = "test-audience", ["Students__BaseUrl"] = "https://students.test/", ["Students__Scope"] = "api://students/.default", ["Academics__BaseUrl"] = "https://academics.test/", ["Academics__Scope"] = "api://academics/.default" };
     [TestCleanup] public void Cleanup() { client?.Dispose(); app?.Dispose(); foreach (var key in Settings.Keys) Environment.SetEnvironmentVariable(key, null); }
     private void Auth(string scopes = "enrollments.read enrollments.write", string role = "Registrar", string? idtyp = null)
     {
@@ -103,7 +103,7 @@ public class ApiTests
     private sealed record Page(int TotalCount, int PageSize);
 }
 
-public sealed class TestApp : WebApplicationFactory<Program>
+public sealed class TestApp(string? sqlConnectionString = null) : WebApplicationFactory<Program>
 {
     public static readonly SymmetricSecurityKey Key = new(Encoding.UTF8.GetBytes("This-is-a-test-only-long-signing-key-123456789"));
     private readonly SqliteConnection connection = new("Data Source=:memory:");
@@ -111,7 +111,7 @@ public sealed class TestApp : WebApplicationFactory<Program>
     public FakeCredential Credential { get; } = new();
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
-        connection.Open();
+        if (sqlConnectionString is null) connection.Open();
         builder.UseEnvironment("Testing");
         builder.ConfigureAppConfiguration(c => c.AddInMemoryCollection(new Dictionary<string, string?>
         {
@@ -126,9 +126,15 @@ public sealed class TestApp : WebApplicationFactory<Program>
         builder.ConfigureServices(s =>
         {
             s.RemoveAll<DbContextOptions<EnrollmentDb>>(); s.RemoveAll<Microsoft.EntityFrameworkCore.Infrastructure.IDbContextOptionsConfiguration<EnrollmentDb>>();
-            s.AddDbContext<EnrollmentDb>(o => o.UseSqlite(connection));
+            s.AddDbContext<EnrollmentDb>(o =>
+            {
+                if (sqlConnectionString is null) o.UseSqlite(connection);
+                else o.UseSqlServer(sqlConnectionString);
+            });
             s.RemoveAll<TokenCredential>(); s.AddSingleton<TokenCredential>(Credential);
-            s.RemoveAll<IDuplicateError>(); s.AddSingleton<IDuplicateError, SqliteDuplicate>();
+            s.RemoveAll<IDuplicateError>();
+            if (sqlConnectionString is null) s.AddSingleton<IDuplicateError, SqliteDuplicate>();
+            else s.AddSingleton<IDuplicateError, SqlDuplicateError>();
             s.AddHttpClient("references").ConfigurePrimaryHttpMessageHandler(() => Handler);
             s.PostConfigure<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme, o =>
             {
@@ -136,7 +142,10 @@ public sealed class TestApp : WebApplicationFactory<Program>
                 o.ConfigurationManager = new StaticConfigurationManager<OpenIdConnectConfiguration>(metadata);
                 o.TokenValidationParameters.ValidIssuer = "https://issuer.test";
             });
-            using var provider = s.BuildServiceProvider(); using var scope = provider.CreateScope(); scope.ServiceProvider.GetRequiredService<EnrollmentDb>().Database.EnsureCreated();
+            if (sqlConnectionString is null)
+            {
+                using var provider = s.BuildServiceProvider(); using var scope = provider.CreateScope(); scope.ServiceProvider.GetRequiredService<EnrollmentDb>().Database.EnsureCreated();
+            }
         });
     }
     protected override void Dispose(bool disposing) { base.Dispose(disposing); if (disposing) connection.Dispose(); }

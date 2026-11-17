@@ -31,3 +31,52 @@ Restore with `dotnet restore --locked-mode`, then `dotnet test` and `dotnet publ
 The original MIT-licensed source at commit `0716ee7262eff2c268ebb72097ceb93e0fc83536` represented the association as `StudentCourse` with student and course IDs and returned courses nested in Students. It had no grade field in that model. V1 owns a unique pair with a separate ID and an optional grade restricted to A/B/C/D/F; it exposes explicit association CRUD and bounded filtered pages rather than nested student records. It deliberately has no cross-service SQL foreign keys, no remote cascade, and no fabricated enrollment seeds. See `LICENSE` for the original copyright and MIT terms.
 
 Candidate CI runs read-only CodeQL for C#, GitHub Actions and Python and retains SARIF as an artifact; it does not upload registered code-scanning alerts. Native default setup remains enabled and must be reassessed after source reaches main. Candidate SARIF is not evidence of native alerts.
+
+## Offline affected-consumer compatibility
+
+Run `dotnet test tests\Contoso.Enrollments.Tests --filter TestCategory=ConsumerCompatibility`.
+With neither variable set this exercises built-in positive fixtures and negative
+missing/renamed `id`, wrong type/value, malformed and oversized response cases through
+the production `ReferenceLookup`, fake test-only credential and an injected HTTP handler.
+No producer OpenAPI comparison substitutes for consuming the actual response.
+
+For actual producer captures set `CONTOSO_CONSUMER_PRODUCER` to `contoso-students`
+or `contoso-academics` and `CONTOSO_CONSUMER_SAMPLES` to an absolute existing directory.
+The same command requires at least one `Student` envelope for Students or `Course`
+envelope for Academics. Each top-level `.json` file is exactly
+`{"schema":"Student","body":{...actual HTTP response JSON...}}` (or `"Course"`).
+Schema names are case-sensitive and filenames arbitrary. All required-category
+samples are consumed, with a positive integer `body.id` used for the request.
+`StudentPage` and Academics' `CoursePage`, `Department`, `DepartmentPage`,
+`Instructor`, `InstructorPage` may coexist but are not consumed.
+
+Only the positive integer `id` field is used by this consumer. Other fields may
+evolve independently; they are intentionally not validated here. The harness asserts
+one app-only GET-by-ID per sample (`/api/v1/students/{id}` or `/api/v1/courses/{id}`),
+the existing per-resource `.default` scope, and fake Bearer authentication. It never
+enumerates lists, adds roles/scopes, fetches URLs in artifacts or acquires live tokens.
+Production response deserialization now requires the identity constructor parameter,
+strict JSON number types and a 1 MiB maximum body; incompatible responses use the
+existing `LookupResult.Unavailable` path (503 in the enrollment create endpoint).
+
+Partial/empty environment configuration, unknown producer/category, missing required
+coverage, malformed JSON, nonobject envelopes/bodies, traversal, symlinks/reparse
+points (including directory ancestors), subdirectories and non-JSON files fail.
+Limits: 32 files, 1 MiB/file, 4 MiB total, JSON depth 32. Supply a dedicated immutable
+artifact directory on a controlled runner: this loader is not an archive extractor
+or protection against concurrent filesystem mutation. CI exercises external inputs
+with explicitly synthetic envelopes, not actual producer evidence. Producer workflows
+must capture real HTTP bodies and orchestrate the affected-consumer checks separately.
+These are offline payload checks, not live Entra/SQL/Azure or deployment evidence.
+
+The SQL integration test also sends real in-process HTTP requests authenticated with
+the test-only signed delegated Registrar JWT against the production routes backed
+by its migrated loopback SQL database. After successful POST, GET-by-ID, list and
+grade-update assertions, it writes five **actual** response envelopes (three
+`Enrollment`, two `EnrollmentPage`, including null and nonnull grades) when
+`CONTOSO_PRODUCER_SAMPLES` names an absolute output directory. Upstream lookups remain
+offline/fake. CI uploads only after all SQL HTTP tests and the no-skipped TRX gate pass,
+as `producer-response-samples-${{ github.sha }}-${{ github.run_attempt }}`. This is
+synthetic test data captured from real HTTP responses, not live university data or
+a handwritten response fixture. Downstream orchestration must bind artifact origin
+to the successful producer SHA, run ID and attempt before invoking the Web harness.
