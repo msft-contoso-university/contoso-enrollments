@@ -1,0 +1,161 @@
+name: CI
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+  push:
+  workflow_dispatch:
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+jobs:
+  story:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: msft-contoso-university/contoso-engineering/.github/actions/story-gate@177851bad37f10f6b68c8d864e470ee743288e59
+        with:
+          github-token: ${{ github.token }}
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
+        with:
+          dotnet-version: 10.0.404
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Restore and compile
+        run: |
+          dotnet restore --locked-mode -p:NuGetAudit=true -p:NuGetAuditMode=all -p:WarningsAsErrors=NU1900%3BNU1901%3BNU1902%3BNU1903%3BNU1904
+          dotnet build -c Release --no-restore -warnaserror
+          dotnet format --verify-no-changes --no-restore
+      - name: Validate OpenAPI and pinned upstream contracts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python -m pip install 'openapi-spec-validator==0.7.2' 'PyYAML==6.0.2'
+          mkdir -p artifacts/upstream
+          gh api 'repos/msft-contoso-university/contoso-students/contents/contracts/students.openapi.yaml?ref=0f9043cb862e5d20644efb32dc690baa16a100a7' --jq .content | base64 -d > artifacts/upstream/students-contract.yaml
+          gh api 'repos/msft-contoso-university/contoso-academics/contents/contracts/academics.openapi.yaml?ref=2eebfe00836c54564bd6519667094f4f71e48dc2' --jq .content | base64 -d > artifacts/upstream/academics-contract.yaml
+          python scripts/validate-contracts.py artifacts/upstream/students-contract.yaml artifacts/upstream/academics-contract.yaml
+      - name: Audit packages
+        run: |
+          dotnet list package --vulnerable --include-transitive --format json > artifacts/audit.json
+          python scripts/check-audit.py artifacts/audit.json
+      - name: Start isolated SQL Server
+        shell: bash
+        run: |
+          set -euo pipefail
+          password="Aa1!$(openssl rand -hex 18)"
+          echo "::add-mask::$password"
+          docker run -d --name sql-enrollments -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD="$password" -p 127.0.0.1::1433 mcr.microsoft.com/mssql/server@sha256:4525e3efac9f3e241cb003bb2ff2a82818b502f37e12049d788b1a9fa7e13b7f
+          port=$(docker port sql-enrollments 1433/tcp | sed 's/.*://')
+          for i in {1..60}; do
+            if timeout 4s docker exec --env SQLCMDPASSWORD="$password" sql-enrollments /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -C -b -l 3 -t 3 -Q 'SELECT 1' > /dev/null 2>&1; then ready=1; break; fi
+            sleep 2
+          done
+          test "${ready:-0}" = 1
+          echo "ENROLLMENTS_TEST_SQL=Server=127.0.0.1,$port;User ID=sa;Password=$password;TrustServerCertificate=true;Encrypt=true" >> "$GITHUB_ENV"
+      - name: Test with SQL Server
+        env:
+          CONTOSO_PRODUCER_SAMPLES: ${{ github.workspace }}/artifacts/producer-response-samples
+        run: |
+          dotnet test -c Release --no-build --no-restore --logger 'trx;LogFileName=results.trx'
+          python scripts/check-test-results.py tests/Contoso.Enrollments.Tests/TestResults/results.trx
+      - name: Upload actual authenticated SQL HTTP producer responses
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: producer-response-samples-${{ github.sha }}-${{ github.run_attempt }}
+          path: artifacts/producer-response-samples/*.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Exercise external consumer sample entrypoint (synthetic only)
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          for producer, schema, fixture in [
+              ("contoso-students", "Student", "student.json"),
+              ("contoso-academics", "Course", "course.json"),
+          ]:
+              directory = Path("artifacts/compatibility") / producer
+              directory.mkdir(parents=True, exist_ok=True)
+              body = json.loads((Path("tests/Contoso.Enrollments.Tests/Fixtures") / fixture).read_text())
+              (directory / (schema + ".json")).write_text(json.dumps({"schema": schema, "body": body}))
+          PY
+          for producer in contoso-students contoso-academics; do
+            CONTOSO_CONSUMER_PRODUCER="$producer" CONTOSO_CONSUMER_SAMPLES="$PWD/artifacts/compatibility/$producer" \
+              dotnet test tests/Contoso.Enrollments.Tests --filter TestCategory=ConsumerCompatibility -c Release --no-build --no-restore
+          done
+      - name: Build candidate container
+        run: |
+          python -m unittest discover -s scripts -p 'test_package_image.py'
+          command -v podman
+          sudo podman build --format oci --platform linux/amd64 --label "org.opencontainers.image.revision=$GITHUB_SHA" -t enrollments-candidate:$GITHUB_SHA .
+          python scripts/package_image.py
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: untrusted-candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/candidate
+          if-no-files-found: error
+          retention-days: 7
+  consumers:
+    needs: build
+    permissions:
+      contents: read
+      actions: read
+    uses: msft-contoso-university/contoso-engineering/.github/workflows/consumer-checks.yml@eb98dd06864557ab29afc0567664ad7f20055358
+  codeql:
+    name: Candidate CodeQL
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Test SARIF evidence validation
+        run: python -m unittest discover -s scripts -p test_codeql.py
+      - uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066
+        with:
+          languages: csharp,actions,python
+          build-mode: none
+          queries: security-extended
+      - uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066
+        with:
+          upload: false
+          output: artifacts/codeql
+      - name: Require complete analysis and no candidate findings
+        run: python scripts/check_codeql.py artifacts/codeql
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: codeql-candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/codeql
+          if-no-files-found: error
+          retention-days: 7
+  required:
+    name: Required
+    if: always()
+    needs: [story, build, codeql, consumers]
+    runs-on: ubuntu-24.04
+    steps:
+      - env:
+          EVENT: ${{ github.event_name }}
+          STORY: ${{ needs.story.result }}
+          BUILD: ${{ needs.build.result }}
+          CODEQL: ${{ needs.codeql.result }}
+          CONSUMERS: ${{ needs.consumers.result }}
+        run: |
+          test "$BUILD" = success
+          test "$CODEQL" = success
+          test "$CONSUMERS" = success
+          if [ "$EVENT" = pull_request ]; then test "$STORY" = success; else test "$STORY" = skipped; fi
