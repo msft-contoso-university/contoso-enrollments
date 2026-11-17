@@ -88,15 +88,17 @@ def main():
     if subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT, text=True).strip():
         raise ValueError("Refusing to export an image from a dirty source tree")
     image_ref = f"enrollments-candidate:{sha}"
-    images = json.loads(subprocess.check_output(["docker", "image", "inspect", image_ref], text=True))
+    images = json.loads(subprocess.check_output(["sudo", "podman", "image", "inspect", image_ref], text=True))
     if len(images) != 1:
         raise ValueError("Exactly one built image is required")
     image = images[0]
+    if re.fullmatch(r"[0-9a-f]{64}", image["Id"]):
+        image["Id"] = "sha256:" + image["Id"]
     target = ROOT / "artifacts" / "candidate"
     target.mkdir(exist_ok=False)
     archive = target / f"contoso-enrollments-{sha}.oci.tar"
     subprocess.run(
-        ["skopeo", "copy", "--format", "oci", f"docker-daemon:{image_ref}", f"oci-archive:{archive}:{sha}"],
+        ["sudo", "podman", "save", "--format", "oci-archive", "--output", str(archive), image_ref],
         check=True,
     )
     manifest_digest = inspect_archive(archive, image, sha)
