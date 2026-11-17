@@ -1,0 +1,87 @@
+name: CI
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+jobs:
+  story:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: msft-contoso-university/contoso-engineering/.github/actions/story-gate@177851bad37f10f6b68c8d864e470ee743288e59
+        with:
+          github-token: ${{ github.token }}
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
+        with:
+          dotnet-version: 10.0.404
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Restore and compile
+        run: |
+          dotnet restore --locked-mode -p:NuGetAudit=true -p:NuGetAuditMode=all -p:WarningsAsErrors=NU1900%3BNU1901%3BNU1902%3BNU1903%3BNU1904
+          dotnet build -c Release --no-restore -warnaserror
+          dotnet format --verify-no-changes --no-restore
+      - name: Validate OpenAPI and pinned Students contract
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python -m pip install 'openapi-spec-validator==0.7.2' 'PyYAML==6.0.2'
+          gh api 'repos/msft-contoso-university/contoso-students/contents/contracts/students.openapi.yaml?ref=4e3d7b4ba3ede34abd2595a726582d5b9d9fbc8e' --jq .content | base64 -d > students-contract.yaml
+          python scripts/validate-contracts.py students-contract.yaml
+      - name: Audit packages
+        run: |
+          dotnet list package --vulnerable --include-transitive --format json > audit.json
+          python scripts/check-audit.py audit.json
+      - name: Start isolated SQL Server
+        shell: bash
+        run: |
+          set -euo pipefail
+          password="Aa1!$(openssl rand -hex 18)"
+          echo "::add-mask::$password"
+          docker run -d --name sql-enrollments -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD="$password" -p 127.0.0.1::1433 mcr.microsoft.com/mssql/server:2022-latest
+          port=$(docker port sql-enrollments 1433/tcp | sed 's/.*://')
+          for i in {1..60}; do
+            if docker exec sql-enrollments /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$password" -C -Q 'SELECT 1' > /dev/null 2>&1; then ready=1; break; fi
+            sleep 2
+          done
+          test "${ready:-0}" = 1
+          echo "ENROLLMENTS_TEST_SQL=Server=127.0.0.1,$port;User ID=sa;Password=$password;TrustServerCertificate=true;Encrypt=true" >> "$GITHUB_ENV"
+      - name: Test with SQL Server
+        run: |
+          dotnet test -c Release --no-build --no-restore --logger 'trx;LogFileName=results.trx'
+          python scripts/check-test-results.py tests/Contoso.Enrollments.Tests/TestResults/results.trx
+      - name: Build candidate container
+        run: |
+          docker build --label "org.opencontainers.image.revision=$GITHUB_SHA" -t enrollments-candidate:$GITHUB_SHA .
+          docker save enrollments-candidate:$GITHUB_SHA | gzip > candidate-image.tar.gz
+          printf '%s\n' "$GITHUB_SHA" > candidate-source-sha.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: enrollments-candidate-${{ github.sha }}
+          path: |
+            candidate-image.tar.gz
+            candidate-source-sha.txt
+            sql/migrations.sql
+  required:
+    name: Required
+    if: always()
+    needs: [story, build]
+    runs-on: ubuntu-24.04
+    steps:
+      - env:
+          EVENT: ${{ github.event_name }}
+          STORY: ${{ needs.story.result }}
+          BUILD: ${{ needs.build.result }}
+        run: |
+          test "$BUILD" = success
+          if [ "$EVENT" = pull_request ]; then test "$STORY" = success; else test "$STORY" = skipped; fi
+
