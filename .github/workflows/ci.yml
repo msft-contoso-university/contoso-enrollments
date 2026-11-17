@@ -72,16 +72,49 @@ jobs:
             candidate-image.tar.gz
             candidate-source-sha.txt
             sql/migrations.sql
+  codeql:
+    name: Candidate CodeQL
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Test SARIF evidence validation
+        run: python -m unittest discover -s scripts -p test_codeql.py
+      - uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066
+        with:
+          languages: csharp,actions,python
+          build-mode: none
+          queries: security-extended
+      - uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066
+        with:
+          upload: false
+          output: artifacts/codeql
+      - name: Require complete analysis and no candidate findings
+        run: python scripts/check_codeql.py artifacts/codeql
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: codeql-candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/codeql
+          if-no-files-found: error
+          retention-days: 7
   required:
     name: Required
     if: always()
-    needs: [story, build]
+    needs: [story, build, codeql]
     runs-on: ubuntu-24.04
     steps:
       - env:
           EVENT: ${{ github.event_name }}
           STORY: ${{ needs.story.result }}
           BUILD: ${{ needs.build.result }}
+          CODEQL: ${{ needs.codeql.result }}
         run: |
           test "$BUILD" = success
+          test "$CODEQL" = success
           if [ "$EVENT" = pull_request ]; then test "$STORY" = success; else test "$STORY" = skipped; fi

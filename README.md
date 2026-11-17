@@ -29,3 +29,5 @@ Restore with `dotnet restore --locked-mode`, then `dotnet test` and `dotnet publ
 ## Legacy semantics and v1 differences
 
 The original MIT-licensed source at commit `0716ee7262eff2c268ebb72097ceb93e0fc83536` represented the association as `StudentCourse` with student and course IDs and returned courses nested in Students. It had no grade field in that model. V1 owns a unique pair with a separate ID and an optional grade restricted to A/B/C/D/F; it exposes explicit association CRUD and bounded filtered pages rather than nested student records. It deliberately has no cross-service SQL foreign keys, no remote cascade, and no fabricated enrollment seeds. See `LICENSE` for the original copyright and MIT terms.
+
+Candidate CI runs read-only CodeQL for C#, GitHub Actions and Python and retains SARIF as an artifact; it does not upload registered code-scanning alerts. Native default setup remains enabled and must be reassessed after source reaches main. Candidate SARIF is not evidence of native alerts.
