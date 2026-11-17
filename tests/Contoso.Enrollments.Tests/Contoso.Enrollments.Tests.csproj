@@ -6,4 +6,5 @@
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.13" />
   </ItemGroup>
   <ItemGroup><ProjectReference Include="..\..\src\Contoso.Enrollments.Api\Contoso.Enrollments.Api.csproj" /></ItemGroup>
+  <ItemGroup><Content Include="Fixtures\*.json" CopyToOutputDirectory="PreserveNewest" /></ItemGroup>
 </Project>

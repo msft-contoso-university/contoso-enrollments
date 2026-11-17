@@ -124,6 +124,3 @@ public partial class Program;
 
 public interface IDuplicateError { bool IsDuplicate(DbUpdateException error); }
 public sealed class SqlDuplicateError : IDuplicateError { public bool IsDuplicate(DbUpdateException error) => error.InnerException is SqlException sql && sql.Number is 2601 or 2627; }
-
-
-

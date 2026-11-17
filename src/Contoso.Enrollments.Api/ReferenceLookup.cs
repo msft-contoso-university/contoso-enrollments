@@ -26,11 +26,10 @@ public sealed class ReferenceLookup(IHttpClientFactory clients, TokenCredential 
             var document = await response.Content.ReadFromJsonAsync<ReferenceDto>(cancellationToken);
             return document?.Id == id ? LookupResult.Found : LookupResult.Unavailable;
         }
-        catch (Exception ex) when (ex is HttpRequestException or Azure.Identity.CredentialUnavailableException or Azure.Identity.AuthenticationFailedException or System.Text.Json.JsonException or TaskCanceledException && !cancellationToken.IsCancellationRequested)
+        catch (Exception ex) when (ex is HttpRequestException or Azure.Identity.CredentialUnavailableException or Azure.Identity.AuthenticationFailedException or System.Text.Json.JsonException or NotSupportedException or IOException or TaskCanceledException && !cancellationToken.IsCancellationRequested)
         {
             return LookupResult.Unavailable;
         }
     }
     private sealed record ReferenceDto(int Id);
 }
-

@@ -30,13 +30,14 @@ jobs:
           dotnet restore --locked-mode -p:NuGetAudit=true -p:NuGetAuditMode=all -p:WarningsAsErrors=NU1900%3BNU1901%3BNU1902%3BNU1903%3BNU1904
           dotnet build -c Release --no-restore -warnaserror
           dotnet format --verify-no-changes --no-restore
-      - name: Validate OpenAPI and pinned Students contract
+      - name: Validate OpenAPI and pinned upstream contracts
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           python -m pip install 'openapi-spec-validator==0.7.2' 'PyYAML==6.0.2'
-          gh api 'repos/msft-contoso-university/contoso-students/contents/contracts/students.openapi.yaml?ref=4e3d7b4ba3ede34abd2595a726582d5b9d9fbc8e' --jq .content | base64 -d > students-contract.yaml
-          python scripts/validate-contracts.py students-contract.yaml
+          gh api 'repos/msft-contoso-university/contoso-students/contents/contracts/students.openapi.yaml?ref=0f9043cb862e5d20644efb32dc690baa16a100a7' --jq .content | base64 -d > students-contract.yaml
+          gh api 'repos/msft-contoso-university/contoso-academics/contents/contracts/academics.openapi.yaml?ref=2eebfe00836c54564bd6519667094f4f71e48dc2' --jq .content | base64 -d > academics-contract.yaml
+          python scripts/validate-contracts.py students-contract.yaml academics-contract.yaml
       - name: Audit packages
         run: |
           dotnet list package --vulnerable --include-transitive --format json > audit.json
@@ -84,4 +85,3 @@ jobs:
         run: |
           test "$BUILD" = success
           if [ "$EVENT" = pull_request ]; then test "$STORY" = success; else test "$STORY" = skipped; fi
-

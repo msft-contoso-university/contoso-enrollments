@@ -13,4 +13,3 @@ Implement and test locally, including authorization and relational persistence; 
 
 ## Current validation
 Local .NET build, publish, OpenAPI validation and SQLite-backed HTTP tests passed. Real SQL Server, Docker build, Azure SQL and Azure Monitor ingestion are not locally verified. CI is configured to run SQL Server and build the candidate container; platform separately owns cloud validation and release.
-
